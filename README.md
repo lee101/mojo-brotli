@@ -88,11 +88,11 @@ by mojo-brotli time, so values above 1.00x favor mojo-brotli.
 
 | case | mojo-brotli | upstream brotli | relative |
 | --- | ---: | ---: | ---: |
-| compress repetitive 8 MiB, quality 5 | 12.10 ms | 12.39 ms | 1.02x |
-| decompress repetitive 8 MiB | 10.83 ms | 13.55 ms | 1.25x |
-| compress random 8 MiB, quality 5 | 72.32 ms | 129.49 ms | 1.79x |
-| decompress random 8 MiB | 4.24 ms | 6.81 ms | 1.61x |
-| compress repetitive 8 MiB, quality 11 | 226.84 ms | 187.57 ms | 0.83x |
+| compress repetitive 8 MiB, quality 5 | 11.53 ms | 11.48 ms | 1.00x |
+| decompress repetitive 8 MiB | 10.25 ms | 11.04 ms | 1.08x |
+| compress random 8 MiB, quality 5 | 62.33 ms | 68.70 ms | 1.10x |
+| decompress random 8 MiB | 1.36 ms | 2.22 ms | 1.64x |
+| compress repetitive 8 MiB, quality 11 | 183.11 ms | 185.57 ms | 1.01x |
 
 There is no separate SIMD, threaded, or GPU path. The Mojo compilation unit
 contains ABI and buffer-management code, while all arithmetic, match finding,
@@ -113,12 +113,13 @@ codec.
 
 The ctypes layer passes C-contiguous buffers as integer addresses and sizes.
 Bytes and writable or read-only NumPy buffers remain zero-copy on input.
-One-shot compression allocates Brotli's maximum encoded size inside the Mojo
-call. One-shot decompression starts with a bounded native buffer and grows it
-geometrically because a Brotli stream does not expose its uncompressed size.
-Python copies the completed output exactly once, then immediately frees the
-native buffer. The incremental decoder uses a contiguous geometrically grown
-buffer for unrestricted output and retains the bounded 32 KiB behavior for
+One-shot compression allocates Brotli's maximum encoded size directly as an
+unexposed Python bytes object and shrinks it to the encoded size after
+libbrotli fills it. One-shot decompression writes into the eventual Python
+bytes result and grows it geometrically because a Brotli stream does not
+expose its uncompressed size. This avoids a full-size native-to-Python output
+copy. The incremental decoder uses a contiguous geometrically grown buffer
+for unrestricted output and retains the bounded 32 KiB behavior for
 backpressure limits. Streaming encoder and decoder contexts are created and
 destroyed through the Mojo library, while no language-owned heap object
 crosses the ABI.

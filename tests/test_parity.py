@@ -232,7 +232,17 @@ def test_numpy_inputs_remain_zero_copy_across_validation():
 def test_contiguous_decoder_growth_boundaries(size):
     source = payload(size)
     encoded = upstream.compress(source, quality=5)
-    assert brotli.decompress(encoded) == source
+    decoded = brotli.decompress(encoded)
+    assert type(decoded) is bytes
+    assert len(decoded) == size
+    assert decoded == source
+
+
+def test_one_shot_compressor_returns_exact_owned_bytes():
+    source = os.urandom(1_100_003)
+    encoded = brotli.compress(memoryview(source), quality=5)
+    assert type(encoded) is bytes
+    assert encoded == upstream.compress(source, quality=5)
 
 
 def test_noncontiguous_and_nonbuffer_inputs_are_rejected():

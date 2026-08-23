@@ -60,6 +60,19 @@ _release_buffer = ctypes.pythonapi.PyBuffer_Release
 _release_buffer.argtypes = [ctypes.POINTER(_PyBuffer)]
 _release_buffer.restype = None
 
+_bytes_new = ctypes.pythonapi.PyBytes_FromStringAndSize
+_bytes_new.argtypes = [ctypes.c_void_p, ctypes.c_ssize_t]
+_bytes_new.restype = ctypes.c_void_p
+_bytes_data = ctypes.pythonapi.PyBytes_AsString
+_bytes_data.argtypes = [ctypes.c_void_p]
+_bytes_data.restype = ctypes.c_void_p
+_bytes_resize = ctypes.pythonapi._PyBytes_Resize
+_bytes_resize.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_ssize_t]
+_bytes_resize.restype = ctypes.c_int
+_decref = ctypes.pythonapi.Py_DecRef
+_decref.argtypes = [ctypes.c_void_p]
+_decref.restype = None
+
 
 class _BufferLease:
     def __init__(self, data):
@@ -69,6 +82,34 @@ class _BufferLease:
     def __del__(self):
         if self.view.obj:
             _release_buffer(ctypes.byref(self.view))
+
+
+class BytesWriter:
+    def __init__(self, size: int):
+        self.size = size
+        self._pointer = ctypes.c_void_p()
+        self._pointer = ctypes.c_void_p(_bytes_new(None, size))
+
+    def __del__(self):
+        if self._pointer.value:
+            _decref(self._pointer)
+
+    @property
+    def address(self) -> int:
+        return _bytes_data(self._pointer) or 0
+
+    def resize(self, size: int):
+        if _bytes_resize(ctypes.byref(self._pointer), size):
+            raise MemoryError
+        self.size = size
+
+    def finish(self, size: int) -> bytes:
+        if size != self.size:
+            self.resize(size)
+        result = ctypes.cast(self._pointer, ctypes.py_object).value
+        _decref(self._pointer)
+        self._pointer = ctypes.c_void_p()
+        return result
 
 
 def lib() -> ctypes.CDLL:

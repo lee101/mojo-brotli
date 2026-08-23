@@ -5,7 +5,7 @@ from __future__ import annotations
 import ctypes
 import operator
 
-from ._lib import as_bytes, buffer_address, lib, writable_buffer
+from ._lib import BytesWriter, as_bytes, buffer_address, lib, writable_buffer
 
 MODE_GENERIC = 0
 MODE_TEXT = 1
@@ -70,25 +70,24 @@ def compress(string, mode=MODE_GENERIC, quality=11, lgwin=22, lgblock=0):
         compressor = Compressor(mode, quality, lgwin, lgblock)
         return compressor.process(source) + compressor.finish()
     source_address, source_size, source_keepalive = buffer_address(source)
-    encoded_address = ctypes.c_void_p()
+    native = lib()
+    capacity = int(native.mb_encoder_max_compressed_size(source_size))
+    destination = BytesWriter(capacity)
     encoded_size = ctypes.c_size_t()
-    try:
-        succeeded = lib().mb_encoder_compress_alloc(
-            quality,
-            lgwin,
-            mode,
-            source_size,
-            source_address,
-            ctypes.addressof(encoded_address),
-            ctypes.addressof(encoded_size),
-        )
-        _ = source_keepalive
-        if not succeeded:
-            raise error("brotli: compressor failed")
-        return ctypes.string_at(encoded_address.value, encoded_size.value)
-    finally:
-        if encoded_address.value:
-            lib().mb_free(encoded_address.value)
+    encoded_size.value = capacity
+    succeeded = native.mb_encoder_compress(
+        quality,
+        lgwin,
+        mode,
+        source_size,
+        source_address,
+        ctypes.addressof(encoded_size),
+        destination.address,
+    )
+    _ = source_keepalive
+    if not succeeded:
+        raise error("brotli: compressor failed")
+    return destination.finish(encoded_size.value)
 
 
 class Compressor:
@@ -315,22 +314,43 @@ def decompress(data):
     """Decompress one complete Brotli stream."""
     source = as_bytes(data)
     source_address, source_size, source_keepalive = buffer_address(source)
-    decoded_address = ctypes.c_void_p()
-    decoded_size = ctypes.c_size_t()
+    native = lib()
+    state = int(native.mb_decoder_create())
+    if not state:
+        raise error("brotli: failed to create decoder")
+    capacity = max(1024 * 1024, source_size)
+    destination = BytesWriter(capacity)
+    available_input = ctypes.c_size_t(source_size)
+    next_input = ctypes.c_void_p(source_address)
+    produced = 0
     try:
-        succeeded = lib().mb_decoder_decompress_alloc(
-            source_size,
-            source_address,
-            ctypes.addressof(decoded_address),
-            ctypes.addressof(decoded_size),
-        )
-        _ = source_keepalive
-        if not succeeded:
-            raise error("brotli: decoder failed")
-        return ctypes.string_at(decoded_address.value, decoded_size.value)
+        while True:
+            available_output = ctypes.c_size_t(capacity - produced)
+            next_output = ctypes.c_void_p(destination.address + produced)
+            result = int(
+                native.mb_decoder_stream(
+                    state,
+                    ctypes.addressof(available_input),
+                    ctypes.addressof(next_input),
+                    ctypes.addressof(available_output),
+                    ctypes.addressof(next_output),
+                )
+            )
+            produced = capacity - available_output.value
+            if result == _DECODER_SUCCESS:
+                if available_input.value:
+                    raise error("brotli: decoder failed")
+                _ = source_keepalive
+                return destination.finish(produced)
+            if result != _DECODER_NEEDS_MORE_OUTPUT:
+                raise error("brotli: decoder failed")
+            new_capacity = capacity * 2
+            if new_capacity <= capacity:
+                raise error("brotli: decoder failed")
+            destination.resize(new_capacity)
+            capacity = new_capacity
     finally:
-        if decoded_address.value:
-            lib().mb_free(decoded_address.value)
+        native.mb_decoder_destroy(state)
 
 
 __all__ = [
