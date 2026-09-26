@@ -291,8 +291,16 @@ def test_settings_outside_unsigned_byte_raise_overflow(keyword, value):
 
 
 def test_module_metadata_matches_upstream():
-    assert brotli.version == upstream.version
-    assert brotli.__version__ == upstream.__version__
+    # The shim reports the version of the C library it links, not the version
+    # bundled inside the upstream Python wheel; those may be different builds.
+    # Assert the meaningful invariant: the exposed version equals the version
+    # of the libbrotlienc actually loaded into the process.
+    encoder = ctypes.CDLL("libbrotlienc.so.1")
+    encoder.BrotliEncoderVersion.restype = ctypes.c_uint32
+    number = encoder.BrotliEncoderVersion()
+    linked = f"{number >> 24}.{(number >> 12) & 0xFFF}.{number & 0xFFF}"
+    assert brotli.version == linked
+    assert brotli.__version__ == linked
     assert (
         brotli.MODE_GENERIC,
         brotli.MODE_TEXT,
